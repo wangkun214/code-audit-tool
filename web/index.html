@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="description" content="源代码静态审计平台 —— 读取代码文件、静态扫描常见漏洞、按严重程度分级、定位到行并给出修复建议，支持导出 Word/HTML/CSV/JSON 报告。">
+<title>源代码静态审计平台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-pane="files">
+<div class="app">
+
+  <!-- ======================= 顶栏 ======================= -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">SA</div>
+      <div class="brand-text">
+        <h1>源代码静态审计平台</h1>
+        <span id="brandVer">Source Code Security Audit</span>
+      </div>
+    </div>
+
+    <!-- 审计目标：点击打开选择器（浏览器原生选择 / 服务器目录） -->
+    <button class="target-chip" id="btnTarget" title="点击选择待审计的代码目录">
+      <span class="tc-ico" aria-hidden="true">⌸</span>
+      <span class="tc-body">
+        <b id="targetName">未选择审计目录</b>
+        <i id="targetPath">点击此处选择待审计的代码目录</i>
+      </span>
+      <span class="tc-badge" id="targetKind" hidden>本地</span>
+      <span class="tc-caret" aria-hidden="true">▾</span>
+    </button>
+
+    <!-- 审计项目：每次扫描独立建档，可回看与追溯 -->
+    <div class="dropdown" id="projDrop">
+      <button id="btnProj" class="ghost" title="历史审计项目（每次扫描独立建档）">
+        <span aria-hidden="true">🗂</span> 项目 <span class="proj-badge" id="projCount" hidden>0</span> ▾
+      </button>
+      <div class="menu" id="projMenu">
+        <div class="menu-title">审计项目（按时间倒序）</div>
+        <div id="projList" class="proj-list"><div class="empty-mini">加载中…</div></div>
+        <button class="menu-foot" id="btnAllHistory">查看全部扫描历史 →</button>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="btnScan" class="primary" title="扫描当前审计目录（快捷键 S）">
+        <span class="btn-dot"></span><span id="btnScanText">开始扫描</span>
+      </button>
+
+      <div class="dropdown" id="exportDrop">
+        <button id="btnExport" class="ghost" disabled title="导出审计报告（快捷键 E）">导出报告 ▾</button>
+        <div class="menu" id="exportMenu">
+          <div class="menu-title">Word 文档</div>
+          <a data-fmt="docx" data-detail="full">Word 报告 · 完整明细（推荐）</a>
+          <a data-fmt="docx" data-detail="summary">Word 报告 · 精简清单</a>
+          <div class="menu-title">其他格式</div>
+          <a data-fmt="html">HTML 网页报告（可打印 / 可筛选）</a>
+          <a data-fmt="md">Markdown 文档</a>
+          <a data-fmt="csv">CSV 表格（Excel 可直接打开）</a>
+          <a data-fmt="json">JSON 数据（含完整明细）</a>
+          <div class="menu-title">历史记录</div>
+          <a data-act="reports">查看已生成的报告…</a>
+        </div>
+      </div>
+
+      <button id="btnRules" class="ghost only-desktop">规则库</button>
+      <button id="btnDeps" class="ghost only-desktop" disabled>依赖清单</button>
+      <button id="btnAbout" class="ghost only-desktop" title="关于本工具 · 问题反馈与建议">反馈</button>
+
+      <!-- 窄屏下替代上面两个按钮 -->
+      <div class="dropdown only-mobile" id="moreDrop">
+        <button id="btnMore" class="ghost" title="更多">⋮</button>
+        <div class="menu" id="moreMenu">
+          <div class="menu-title">工具</div>
+          <a data-act="rules">内置审计规则库</a>
+          <a data-act="deps">第三方依赖清单</a>
+          <a data-act="reports">已生成的报告</a>
+          <a data-act="target">切换审计目录…</a>
+          <div class="menu-title">帮助</div>
+          <a data-act="about">关于与反馈</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ======================= 进度 ======================= -->
+  <div class="progress-wrap" id="progressWrap">
+    <div class="progress-info">
+      <span class="phase" id="progPhase">就绪</span>
+      <span class="prog-file" id="progFile"></span>
+      <span class="prog-count" id="progCount"></span>
+    </div>
+    <div class="progress-track"><div class="progress-bar" id="progBar"></div></div>
+  </div>
+
+  <!-- ======================= 风险总览条 ======================= -->
+  <section class="kpi-bar" aria-label="审计总览">
+    <div class="risk-card">
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 128 128" aria-hidden="true">
+          <circle class="ring-bg" cx="64" cy="64" r="54"></circle>
+          <circle class="ring-fg" id="ringFg" cx="64" cy="64" r="54"></circle>
+        </svg>
+        <div class="ring-center">
+          <b id="kpiRisk">--</b>
+          <span>风险指数</span>
+        </div>
+      </div>
+      <div class="risk-side">
+        <div class="risk-verdict" id="riskVerdict">等待扫描</div>
+        <div class="risk-note" id="riskNote">选择一个目录后点击「开始扫描」</div>
+      </div>
+    </div>
+
+    <div class="sev-cards" id="sevCards" role="group" aria-label="按严重程度筛选">
+      <button class="sev-card" data-sev="critical" title="只看严重">
+        <b id="kpi-critical">0</b><span>严重</span><i class="bar"></i></button>
+      <button class="sev-card" data-sev="high" title="只看高危">
+        <b id="kpi-high">0</b><span>高危</span><i class="bar"></i></button>
+      <button class="sev-card" data-sev="medium" title="只看中危">
+        <b id="kpi-medium">0</b><span>中危</span><i class="bar"></i></button>
+      <button class="sev-card" data-sev="low" title="只看低危">
+        <b id="kpi-low">0</b><span>低危</span><i class="bar"></i></button>
+      <button class="sev-card" data-sev="info" title="只看提示">
+        <b id="kpi-info">0</b><span>提示</span><i class="bar"></i></button>
+    </div>
+
+    <div class="stat-cards">
+      <div class="stat-card"><b id="kpiFiles">--</b><span>扫描文件</span></div>
+      <div class="stat-card"><b id="kpiLines">--</b><span>代码行数</span></div>
+      <div class="stat-card"><b id="kpiHitFiles">--</b><span>命中文件</span></div>
+      <div class="stat-card"><b id="kpiSuppressed">--</b><span>降噪抑制</span></div>
+      <button class="stat-card stat-vuln" id="statVuln" title="第三方依赖已知漏洞（点击查看清单与修复建议）">
+        <b id="kpiVulns">--</b><span>依赖漏洞</span><i class="dot" id="vulnDot" hidden></i>
+      </button>
+    </div>
+  </section>
+
+  <!-- ======================= 窄屏分栏切换 ======================= -->
+  <nav class="pane-switch" id="paneSwitch" role="tablist" aria-label="工作区切换">
+    <button class="on" data-pane="files" role="tab" aria-selected="true">目录</button>
+    <button data-pane="center" role="tab" aria-selected="false">源码</button>
+    <button data-pane="findings" role="tab" aria-selected="false">结果 <b id="mCount">0</b></button>
+  </nav>
+
+  <!-- ======================= 主工作区 ======================= -->
+  <main class="workspace" id="workspace">
+
+    <!-- 左：审计目录树 -->
+    <aside class="pane pane-files">
+      <div class="pane-head">
+        <span class="pane-title">审计目录</span>
+        <div class="head-tools">
+          <span class="pane-count" id="fileCount">-</span>
+          <button class="icon-btn" id="btnExpandAll" title="展开全部目录（含深层子目录）" aria-label="展开全部">⤢</button>
+          <button class="icon-btn" id="btnCollapseAll" title="折叠全部目录（仅留顶层）" aria-label="折叠全部">⤡</button>
+        </div>
+      </div>
+      <div class="pane-tools">
+        <div class="search-box">
+          <span aria-hidden="true">⌕</span>
+          <input id="fileSearch" type="text" placeholder="按文件名 / 路径过滤…（快捷键 F）">
+          <button class="clear" id="fileSearchClear" hidden aria-label="清空">✕</button>
+        </div>
+        <div class="tool-row">
+          <label class="chk"><input type="checkbox" id="onlyIssues"> 只看有问题</label>
+          <label class="chk" title="打开源码时自动展开并定位到该文件"><input type="checkbox" id="autoExpand" checked> 自动定位</label>
+          <select id="treeDepth" class="mini-select" title="目录树默认展开层级" aria-label="默认展开层级">
+            <option value="1">展开 1 层</option>
+            <option value="2" selected>展开 2 层</option>
+            <option value="3">展开 3 层</option>
+            <option value="all">全部展开</option>
+          </select>
+        </div>
+        <div class="tree-hint" title="单击目录行：展开 / 收起；双击目录行：展开 / 收起整棵子树；单击文件行：打开源码；↑ ↓ ← → 键盘导航，Enter 打开文件">
+          <b>单击</b>展开/收起 · <b>双击</b>全展子树 · <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> 导航
+        </div>
+      </div>
+      <div class="tree" id="tree" role="tree" tabindex="0" aria-label="审计目录树">
+        <div class="empty">点击顶栏「审计目标」选择目录，再点「开始扫描」</div>
+      </div>
+    </aside>
+
+    <div class="gutter" id="gutterLeft" title="拖动调整宽度"><i></i></div>
+
+    <!-- 中：源码 / 看板 -->
+    <section class="pane pane-center">
+      <div class="pane-head">
+        <div class="tabs" id="centerTabs">
+          <button class="on" data-tab="code">源码检视</button>
+          <button data-tab="board">安全看板</button>
+          <button data-tab="deps">依赖风险 <b class="tab-badge" id="depsBadge" hidden>0</b></button>
+        </div>
+        <div class="head-tools">
+          <span class="pane-count" id="viewPath">未选择文件</span>
+        </div>
+      </div>
+
+      <div class="tab-pane on" id="tabCode">
+        <div class="code-toolbar">
+          <span class="code-meta" id="viewMeta"></span>
+          <span class="spacer"></span>
+          <button class="mini" id="btnPrevHit" disabled>↑ 上一处风险</button>
+          <button class="mini" id="btnNextHit" disabled>↓ 下一处风险</button>
+          <button class="mini" id="btnWrap">自动换行</button>
+          <button class="mini" id="btnCopyPath" disabled>复制路径</button>
+        </div>
+        <div class="viewer" id="viewer">
+          <div class="empty">← 从左侧目录树选择文件查看源码<br><br>扫描完成后，命中风险的行会高亮标记</div>
+        </div>
+      </div>
+
+      <div class="tab-pane" id="tabBoard">
+        <div class="board" id="board">
+          <div class="empty">完成扫描后，此处展示风险分布看板</div>
+        </div>
+      </div>
+
+      <div class="tab-pane" id="tabDeps">
+        <div class="vuln-bar">
+          <div class="vuln-bar-main">
+            <span class="vuln-src" id="vulnSrc">依赖漏洞库 · OSV.dev</span>
+            <span class="vuln-meta" id="vulnMeta"></span>
+          </div>
+          <div class="vuln-bar-actions">
+            <label class="chk" title="离线模式：只读本地缓存，不发起任何网络请求">
+              <input type="checkbox" id="vulnOffline"> 离线</label>
+            <button class="mini" id="btnVulnRefresh" title="清空本地缓存并重新联网查询">更新漏洞库</button>
+          </div>
+        </div>
+        <div class="vuln-tools">
+          <div class="sev-chips sm" id="vulnSevChips"></div>
+          <div class="search-box">
+            <span aria-hidden="true">⌕</span>
+            <input id="vulnSearch" type="text" placeholder="搜索依赖包 / CVE / 漏洞编号 / 文件…">
+            <button class="clear" id="vulnSearchClear" hidden aria-label="清空">✕</button>
+          </div>
+          <div class="tool-row">
+            <select id="vulnFix" class="mini-select" title="按修复可行性筛选" aria-label="修复可行性">
+              <option value="all">全部修复状态</option>
+              <option value="easy">同版本线内可修复</option>
+              <option value="cross">需升级版本线</option>
+              <option value="none">暂无修复版本</option>
+            </select>
+            <select id="vulnSort" class="mini-select" title="排序方式" aria-label="排序">
+              <option value="severity">按严重程度</option>
+              <option value="cvss">按 CVSS 分数</option>
+              <option value="package">按依赖包名</option>
+              <option value="fix">按修复难度</option>
+            </select>
+            <select id="vulnGroup" class="mini-select" title="聚合方式" aria-label="聚合">
+              <option value="">不聚合</option>
+              <option value="package">按依赖包聚合</option>
+              <option value="severity">按严重程度聚合</option>
+              <option value="ecosystem">按生态聚合</option>
+              <option value="fix">按修复可行性聚合</option>
+              <option value="manifest">按清单文件聚合</option>
+              <option value="cvss">按 CVSS 档位聚合</option>
+            </select>
+          </div>
+        </div>
+        <div class="vuln-body" id="vulnBody">
+          <div class="empty">完成扫描后，此处展示第三方依赖的已知漏洞与修复建议</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="gutter" id="gutterRight" title="拖动调整宽度"><i></i></div>
+
+    <!-- 右：审计结果 -->
+    <aside class="pane pane-findings">
+      <div class="pane-head">
+        <span class="pane-title">审计结果</span>
+        <div class="head-tools">
+          <span class="pane-count" id="findingCount">0 项</span>
+          <button class="icon-btn" id="btnCollapseAllGroups" title="全部折叠" aria-label="全部折叠">⤡</button>
+        </div>
+      </div>
+
+      <div class="filters">
+        <div class="sev-chips" id="sevChips" role="group" aria-label="按严重程度筛选">
+          <button class="on" data-sev="all">全部</button>
+          <button data-sev="critical">严重</button>
+          <button data-sev="high">高危</button>
+          <button data-sev="medium">中危</button>
+          <button data-sev="low">低危</button>
+          <button data-sev="info">提示</button>
+        </div>
+        <div class="filter-row">
+          <select id="groupBy" title="分组方式" aria-label="分组方式">
+            <option value="">不分组（时间线）</option>
+          </select>
+          <select id="sortBy" title="排序方式" aria-label="排序方式">
+            <option value="risk">按风险优先级</option>
+            <option value="score">按风险分</option>
+            <option value="file">按文件路径</option>
+            <option value="rule">按规则编号</option>
+          </select>
+        </div>
+        <div class="filter-row">
+          <select id="catFilter" title="漏洞类型" aria-label="漏洞类型"><option value="all">全部类型</option></select>
+          <div class="search-box">
+            <span aria-hidden="true">⌕</span>
+            <input id="findSearch" type="text" placeholder="搜索问题 / 文件 / 规则…（快捷键 /）">
+            <button class="clear" id="findSearchClear" hidden aria-label="清空">✕</button>
+          </div>
+        </div>
+        <div class="tool-row">
+          <label class="chk"><input type="checkbox" id="onlyProd"> 仅生产代码</label>
+          <span class="filter-summary" id="filterSummary"></span>
+        </div>
+      </div>
+
+      <div class="findings" id="findings">
+        <div class="empty">暂无审计结果</div>
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- ======================= 状态栏 ======================= -->
+  <footer class="statusbar">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText">就绪</span>
+    <span class="spacer"></span>
+    <span class="status-meta" id="statusMeta"></span>
+    <button class="status-fb" id="btnFeedback"
+            title="问题反馈与建议 · 收件邮箱 wangwangdui214@qq.com">✉ 反馈</button>
+    <span class="kbd-hints">
+      <kbd>/</kbd>搜索 <kbd>F</kbd>文件 <kbd>S</kbd>扫描 <kbd>E</kbd>导出 <kbd>B</kbd>看板 <kbd>D</kbd>依赖 <kbd>T</kbd>目标
+    </span>
+  </footer>
+</div>
+
+<!-- ======================= 审计目标选择器 ======================= -->
+<div class="modal" id="modalTarget">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2>选择审计目标</h2>
+      <button class="close" data-close aria-label="关闭">✕</button>
+    </div>
+
+    <div class="seg" id="targetTabs" role="tablist">
+      <button class="on" data-ttab="browser" role="tab">浏览器选择文件夹</button>
+      <button data-ttab="server" role="tab">服务器目录</button>
+    </div>
+
+    <!-- ---------- 模式一：浏览器原生目录选择器 ---------- -->
+    <div class="tpanel on" id="tpBrowser">
+      <div class="pick-zone" id="pickZone" tabindex="0" role="button"
+           aria-label="选择本地文件夹">
+        <div class="pz-ico" aria-hidden="true">🗂</div>
+        <b id="pickZoneTitle">点击选择本地文件夹</b>
+        <span id="pickHint">将调用浏览器原生目录选择器 · 也可把文件夹拖到这里</span>
+      </div>
+
+      <div class="pick-info" id="pickInfo" hidden>
+        <div class="pi-row">
+          <span class="pi-lab">已选择</span>
+          <b id="pickName">-</b>
+        </div>
+        <div class="pi-grid">
+          <div class="pi-item"><b id="pickFiles">0</b><span>待上传文件</span></div>
+          <div class="pi-item"><b id="pickSize">0 B</b><span>总大小</span></div>
+          <div class="pi-item"><b id="pickSkip">0</b><span>已忽略文件</span></div>
+        </div>
+      </div>
+
+      <div class="pick-actions">
+        <button class="primary" id="btnUploadScan" disabled>上传并扫描</button>
+        <button class="mini" id="btnUploadOnly" disabled>仅上传</button>
+        <button class="mini" id="btnClearPick" disabled>重新选择</button>
+      </div>
+
+      <div class="up-progress" id="upProgress" hidden>
+        <div class="progress-track"><div class="progress-bar" id="upBar"></div></div>
+        <span id="upText"></span>
+      </div>
+
+      <p class="hint" id="targetHint">
+        浏览器的安全模型不会把本机绝对路径交给网页（<code>FileSystemDirectoryHandle.name</code>
+        只有文件夹名），因此网页选目录后需要把文件上传到本工具的服务端再扫描。
+        上传副本保存在 <code>audit-tool/workspaces/</code>，仅保留最近 6 份，可随时删除。
+      </p>
+    </div>
+
+    <!-- ---------- 模式二：服务器目录 ---------- -->
+    <div class="tpanel" id="tpServer">
+      <label class="fld">
+        <span>服务器上的目录路径</span>
+        <input id="serverPath" type="text" spellcheck="false" placeholder="C:\path\to\source" autocomplete="off">
+      </label>
+      <div class="pick-actions">
+        <button class="mini" id="btnBrowseDir">📂 浏览目录…</button>
+        <button class="mini" id="btnBrowse" hidden>🖥 系统对话框</button>
+        <button class="primary" id="btnUseServer">使用此目录并扫描</button>
+      </div>
+
+      <!-- 网页目录浏览器：服务端纯标准库列举，无需 tkinter，跨平台可用 -->
+      <div class="dirbrowser" id="dirBrowser" hidden>
+        <div class="db-head">
+          <button class="mini sq" id="dbUp" title="上一级目录">↑</button>
+          <div class="db-crumbs" id="dbCrumbs"></div>
+        </div>
+        <div class="db-roots" id="dbRoots"></div>
+        <div class="db-list" id="dbList" role="listbox" aria-label="子目录列表"></div>
+        <div class="db-foot">
+          <div class="db-meta">
+            <span class="db-sum" id="dbSelf"></span>
+            <span class="db-path" id="dbPath"></span>
+          </div>
+          <div class="db-actions">
+            <button class="mini" id="dbCancel">收起</button>
+            <button class="mini" id="dbPick">选择此目录</button>
+            <button class="primary" id="dbPickScan">选择并扫描</button>
+          </div>
+        </div>
+      </div>
+
+      <p class="hint">
+        适合体量较大的本地仓库：<b>无需上传</b>，服务端直接读取该目录，扫描最快、也最完整。
+        「浏览目录…」由工具自己列举服务器目录，<b>不依赖 Python 是否自带 tkinter</b>，
+        任何 Python 3.9+ 环境都可正常选用目录。
+      </p>
+      <p class="hint warn" id="tkNote" hidden>
+        检测到当前 Python 解释器未包含 <code>tkinter</code>：系统对话框按钮已隐藏，
+        请使用「浏览目录…」——功能完全等价，无需安装任何东西。
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 规则库 ======================= -->
+<div class="modal" id="modalRules">
+  <div class="modal-box wide">
+    <div class="modal-head">
+      <h2>内置审计规则库 <span id="ruleCount"></span></h2>
+      <button class="close" data-close aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-tools">
+      <div class="search-box">
+        <span aria-hidden="true">⌕</span>
+        <input id="ruleSearch" type="text" placeholder="搜索规则名称 / 编号 / CWE…">
+      </div>
+      <div class="sev-chips sm" id="ruleSevChips">
+        <button class="on" data-sev="all">全部</button>
+        <button data-sev="critical">严重</button>
+        <button data-sev="high">高危</button>
+        <button data-sev="medium">中危</button>
+        <button data-sev="low">低危</button>
+        <button data-sev="info">提示</button>
+      </div>
+    </div>
+    <div class="modal-body" id="ruleList"></div>
+  </div>
+</div>
+
+<!-- ======================= 依赖清单 ======================= -->
+<div class="modal" id="modalDeps">
+  <div class="modal-box wide">
+    <div class="modal-head">
+      <h2>第三方依赖清单 <span id="depCount"></span></h2>
+      <button class="close" data-close aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-tools">
+      <div class="search-box">
+        <span aria-hidden="true">⌕</span>
+        <input id="depSearch" type="text" placeholder="搜索依赖包名…">
+      </div>
+      <div class="sev-chips sm" id="depEcoChips"></div>
+    </div>
+    <div class="modal-body" id="depList"></div>
+  </div>
+</div>
+
+<!-- ======================= 报告历史 ======================= -->
+<div class="modal" id="modalReports">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2>已生成的审计报告</h2>
+      <button class="close" data-close aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body" id="reportList"></div>
+  </div>
+</div>
+
+<!-- ======================= 关于与反馈 ======================= -->
+<div class="modal" id="modalAbout">
+  <div class="modal-box about-box">
+    <div class="modal-head">
+      <h2>关于与反馈</h2>
+      <button class="close" data-close aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- ---------- 工具标识 ---------- -->
+      <section class="about-hero">
+        <div class="ah-logo" aria-hidden="true">SA</div>
+        <div class="ah-text">
+          <b id="aboutName">源代码静态审计平台</b>
+          <span id="aboutVersion">—</span>
+          <div class="ah-tags">
+            <i class="ah-tag">零第三方依赖</i>
+            <i class="ah-tag">拷贝即用</i>
+            <i class="ah-tag">本地运行 · 数据不出机</i>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- 反馈与沟通入口 ---------- -->
+      <section class="about-block fb-block">
+        <h3>问题反馈与建议</h3>
+        <p>遇到<b>误报 / 漏报</b>、规则命中不符合预期、导出异常，或希望新增审计规则、
+           改进报告口径，欢迎来信沟通。</p>
+
+        <div class="fb-email">
+          <span class="fb-lab">收件邮箱</span>
+          <code id="aboutEmail">—</code>
+          <button class="mini" id="aboutCopyMail" title="复制邮箱地址">复制</button>
+        </div>
+
+        <div class="fb-actions">
+          <a class="primary btn-link" id="aboutMail" href="#"
+             title="用本机默认邮件客户端撰写反馈邮件（主题与诊断信息已预填）">
+            <span aria-hidden="true">✉</span> 发送邮件反馈
+          </a>
+          <button class="mini" id="aboutCopyDiag" title="复制版本与运行环境信息">
+            复制诊断信息
+          </button>
+        </div>
+
+        <p class="fb-hint">
+          邮件中附带诊断信息可显著加快问题定位。若本机未配置邮件客户端，
+          先点「复制诊断信息」，再把内容粘贴到任意邮箱发送即可。
+        </p>
+      </section>
+
+      <!-- ---------- 依赖项与环境要求 ---------- -->
+      <section class="about-block">
+        <h3>依赖项与环境要求</h3>
+        <div class="env-grid" id="aboutEnv">
+          <div class="empty-mini">读取运行环境…</div>
+        </div>
+        <div class="env-checks" id="aboutChecks"></div>
+      </section>
+
+      <!-- ---------- 迁移说明 ---------- -->
+      <section class="about-block">
+        <h3>可移植性</h3>
+        <p class="fb-hint">
+          整个 <code>audit-tool/</code> 目录可直接拷贝到其他电脑运行：
+          <b>零第三方依赖</b>、路径全部相对化，只需目标机器装有 <b>Python 3.9+</b>。
+          历史项目档案（<code>projects/</code>）与漏洞库缓存（<code>vulndb/</code>）随包携带，离线可用。
+          拷到新机器后建议先双击 <code>checkenv.bat</code>（或执行
+          <code>python app.py --check-env</code>）确认环境就绪。
+        </p>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- ============ 一级页面：扫描历史列表（#/history） ============ -->
+<div class="page" id="pageHistory" hidden>
+  <header class="page-head">
+    <button class="mini" id="histBack">← 返回工作台</button>
+    <div class="ph-title">
+      <b>扫描历史</b>
+      <span id="histSub">每次扫描独立建档，可追溯当时的完整结果与配置</span>
+    </div>
+    <div class="ph-actions">
+      <button class="mini" id="histRefresh" title="重新读取历史记录">↻ 刷新</button>
+    </div>
+  </header>
+  <div class="page-scroll" id="histScroll">
+    <div class="page-inner">
+      <div class="hist-kpis" id="histKpis"></div>
+
+      <div class="hist-tools">
+        <label class="hist-search">
+          <span aria-hidden="true">🔍</span>
+          <input id="histKw" type="search" placeholder="搜索目标名 / 路径 / 项目 ID"
+                 autocomplete="off" spellcheck="false">
+        </label>
+        <select id="histStatus" class="mini-select" title="按状态筛选"></select>
+        <select id="histSort" class="mini-select" title="排序方式"></select>
+        <select id="histSize" class="mini-select" title="每页条数"></select>
+        <span class="hist-count" id="histCount"></span>
+      </div>
+
+      <div class="hist-list" id="histList" role="list">
+        <div class="empty-mini">加载中…</div>
+      </div>
+      <div class="hist-pager" id="histPager" hidden></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 二级页面：扫描详情（#/history/<项目ID>） ============ -->
+<div class="page" id="pageHistDetail" hidden>
+  <header class="page-head">
+    <button class="mini" id="detBack">← 扫描历史</button>
+    <div class="ph-title">
+      <b id="detTitle">扫描详情</b>
+      <span id="detSub">加载中…</span>
+    </div>
+    <div class="ph-actions">
+      <button class="mini" id="detOpen" title="把该项目载入工作台以浏览源码与结果">在工作台中打开</button>
+      <button class="mini" id="detExport" title="导出该次扫描的报告（5 种格式）">导出报告</button>
+      <button class="mini danger" id="detDelete" title="删除该项目及其全部数据">删除</button>
+    </div>
+  </header>
+  <div class="page-scroll">
+    <div class="page-inner" id="detBody">
+      <div class="empty-mini">加载中…</div>
+    </div>
+  </div>
+</div>
+
+<!-- 原生目录选择器的降级实现（浏览器不支持 File System Access API 时使用） -->
+<input type="file" id="dirPicker" webkitdirectory directory multiple hidden>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
